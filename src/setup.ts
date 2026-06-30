@@ -15,29 +15,27 @@ import pc from 'picocolors';
 import { PROVIDERS, getProvider, validateLLM, curateModels } from './providers.js';
 import { validateTossCredentials, TOSS_BASE_URL } from './toss.js';
 import { runChat } from './chat.js';
-import {
-  saveConfig,
-  loadConfig,
-  configExists,
-  CONFIG_PATH,
-  maskSecret,
-} from './config.js';
+import { saveConfig, loadConfig, configExists, CONFIG_PATH, maskSecret } from './config.js';
 import { banner, toss, tossSoft, ok, warn, danger, kv } from './theme.js';
+import type { Config, LlmConfig, TossConfig } from './types.js';
 
 // Bail out cleanly when the user hits Ctrl+C / ESC on any prompt.
-function guard(value) {
+function guard<T>(value: T | symbol): T {
   if (isCancel(value)) {
     cancel('설정을 취소했어요. 언제든 다시 `biero setup` 으로 시작할 수 있어요.');
     process.exit(0);
   }
-  return value;
+  return value as T;
 }
 
-const required = (label) => (v) => (v && String(v).trim() ? undefined : `${label}을(를) 입력해 주세요.`);
-const isUrl = (v) =>
-  /^https?:\/\/.+/i.test(String(v).trim()) ? undefined : 'http(s):// 로 시작하는 URL이어야 해요.';
+type Validator = (value: string | undefined) => string | undefined;
 
-function requireTTY() {
+const required = (label: string): Validator => (v) =>
+  v && String(v).trim() ? undefined : `${label}을(를) 입력해 주세요.`;
+const isUrl: Validator = (v) =>
+  /^https?:\/\/.+/i.test(String(v ?? '').trim()) ? undefined : 'http(s):// 로 시작하는 URL이어야 해요.';
+
+function requireTTY(): boolean {
   if (process.stdin.isTTY && process.stdout.isTTY) return true;
   process.stdout.write(
     `\n${danger('대화형 터미널이 필요해요.')} 터미널에서 직접 ${pc.bold('biero setup')} 을 실행해 주세요.\n\n`,
@@ -46,7 +44,7 @@ function requireTTY() {
 }
 
 // ── LLM provider step ─────────────────────────────────────────────────────
-async function stepLLM() {
+async function stepLLM(): Promise<LlmConfig> {
   const providerId = guard(
     await select({
       message: 'LLM 공급자를 선택하세요',
@@ -54,7 +52,7 @@ async function stepLLM() {
       initialValue: 'openai',
     }),
   );
-  const provider = getProvider(providerId);
+  const provider = getProvider(providerId)!;
 
   let baseURL = provider.baseURL;
   if (provider.id === 'custom') {
@@ -69,13 +67,10 @@ async function stepLLM() {
 
   let apiKey = '';
   if (provider.needsKey) {
-    apiKey = guard(
-      await password({ message: `${provider.label} API Key`, validate: required('API Key') }),
-    );
+    apiKey = guard(await password({ message: `${provider.label} API Key`, validate: required('API Key') }));
   }
 
-  // Auto-validate with a spinner.
-  let result;
+  let result = await validateLLM(provider, apiKey, baseURL);
   for (;;) {
     const s = spinner();
     s.start(`${provider.label} 연결을 확인하는 중…`);
@@ -85,9 +80,7 @@ async function stepLLM() {
       break;
     }
     s.stop(
-      danger(
-        `연결 실패 — ${result.message || (result.status ? `HTTP ${result.status}` : '알 수 없는 오류')}`,
-      ),
+      danger(`연결 실패 — ${result.message || (result.status ? `HTTP ${result.status}` : '알 수 없는 오류')}`),
     );
     const choice = guard(
       await select({
@@ -105,7 +98,6 @@ async function stepLLM() {
       cancel('설정을 종료했어요.');
       process.exit(0);
     }
-    // On retry, let custom users fix a mistyped Base URL too — not just the key.
     if (provider.id === 'custom') {
       baseURL = guard(
         await text({
@@ -117,33 +109,26 @@ async function stepLLM() {
       ).trim();
     }
     if (provider.needsKey) {
-      apiKey = guard(
-        await password({ message: `${provider.label} API Key`, validate: required('API Key') }),
-      );
+      apiKey = guard(await password({ message: `${provider.label} API Key`, validate: required('API Key') }));
     }
   }
 
-  // Model selection — curate to recent chat models (providers return lots of
-  // non-chat noise: embeddings, tts, whisper, image, moderation, …).
+  // Model selection — curate to recent chat models.
   let model = '';
   const rawModels = result.ok && Array.isArray(result.models) ? result.models : [];
   if (rawModels.length) {
     const curated = curateModels(provider, rawModels);
-    const list = curated.length ? curated : rawModels; // fallback if filter removes all
+    const list = curated.length ? curated : rawModels;
     const top = list.slice(0, 12);
-    const options = top.map((m) => ({ value: m, label: m }));
-    if (list.length > top.length) {
-      options.push({ value: '__all__', label: `더 많은 모델 보기 (${list.length}개)` });
-    }
+    const options: Array<{ value: string; label: string }> = top.map((m) => ({ value: m, label: m }));
+    if (list.length > top.length) options.push({ value: '__all__', label: `더 많은 모델 보기 (${list.length}개)` });
     options.push({ value: '__custom__', label: '기타 — 직접 입력' });
 
     let picked = guard(await select({ message: '사용할 모델', options, initialValue: top[0] }));
     if (picked === '__all__') {
-      const allOptions = list.map((m) => ({ value: m, label: m }));
+      const allOptions: Array<{ value: string; label: string }> = list.map((m) => ({ value: m, label: m }));
       allOptions.push({ value: '__custom__', label: '기타 — 직접 입력' });
-      picked = guard(
-        await select({ message: `사용할 모델 (전체 ${list.length}개)`, options: allOptions }),
-      );
+      picked = guard(await select({ message: `사용할 모델 (전체 ${list.length}개)`, options: allOptions }));
     }
     if (picked === '__custom__') {
       const raw = guard(await text({ message: '모델 이름', validate: required('모델') }));
@@ -152,8 +137,6 @@ async function stepLLM() {
       model = picked;
     }
   } else {
-    // Optional: empty Enter resolves to `undefined` in @clack — coalesce before trim.
-    // No placeholder so Tab can't autofill a bogus model id.
     const raw = guard(await text({ message: '사용할 모델 (선택 · 비워도 됨)' }));
     model = (raw ?? '').trim();
   }
@@ -163,9 +146,8 @@ async function stepLLM() {
 
 // ── Toss credentials step ─────────────────────────────────────────────────
 // The Toss console labels these "API Key" (tsck_live_…) and "Secret Key"
-// (tssk_live_…). In the OAuth2 client_credentials grant they are the
-// client_id and client_secret respectively.
-async function stepToss() {
+// (tssk_live_…). In OAuth2 they are client_id / client_secret.
+async function stepToss(): Promise<TossConfig> {
   note(
     [
       '토스증권 WTS 로그인 → 설정 → Open API 에서',
@@ -187,20 +169,13 @@ async function stepToss() {
   for (;;) {
     clientId = (
       guard(
-        await text({
-          message: 'Toss API Key',
-          placeholder: 'tsck_live_…',
-          validate: required('API Key'),
-        }),
+        await text({ message: 'Toss API Key', placeholder: 'tsck_live_…', validate: required('API Key') }),
       ) ?? ''
     ).trim();
     clientSecret = (
-      guard(
-        await password({ message: 'Toss Secret Key', validate: required('Secret Key') }),
-      ) ?? ''
+      guard(await password({ message: 'Toss Secret Key', validate: required('Secret Key') })) ?? ''
     ).trim();
 
-    // The two are easy to paste in the wrong order — catch it early.
     if (clientId.startsWith('tssk_') || clientSecret.startsWith('tsck_')) {
       note(
         [
@@ -220,9 +195,7 @@ async function stepToss() {
       verified = true;
       break;
     }
-    const detail = [res.status && `HTTP ${res.status}`, res.code, res.message]
-      .filter(Boolean)
-      .join(' · ');
+    const detail = [res.status && `HTTP ${res.status}`, res.code, res.message].filter(Boolean).join(' · ');
     s.stop(danger(`인증 실패${detail ? ` — ${detail}` : ''}`));
 
     const hint =
@@ -255,19 +228,14 @@ async function stepToss() {
 }
 
 // ── Orchestration ─────────────────────────────────────────────────────────
-export async function runSetup() {
+export async function runSetup(): Promise<void> {
   process.stdout.write(banner());
   if (!requireTTY()) return;
 
   intro(`${pc.inverse(toss(' Biero '))}  ${pc.dim('설정을 시작할게요')}`);
 
   if (configExists()) {
-    const again = guard(
-      await confirm({
-        message: '이미 설정이 있어요. 다시 설정할까요?',
-        initialValue: false,
-      }),
-    );
+    const again = guard(await confirm({ message: '이미 설정이 있어요. 다시 설정할까요?', initialValue: false }));
     if (!again) {
       outro(tossSoft('기존 설정을 그대로 둘게요.'));
       return;
@@ -291,7 +259,7 @@ export async function runSetup() {
 
   const now = new Date().toISOString();
   const existing = loadConfig();
-  const config = {
+  const config: Config = {
     version: 1,
     llm,
     toss: tossCreds,
@@ -301,9 +269,7 @@ export async function runSetup() {
   const savedPath = saveConfig(config);
 
   const permLabel =
-    process.platform === 'win32'
-      ? '사용자 폴더에 저장 (Windows 파일 ACL 적용)'
-      : '600 (본인만 읽기/쓰기)';
+    process.platform === 'win32' ? '사용자 폴더에 저장 (Windows 파일 ACL 적용)' : '600 (본인만 읽기/쓰기)';
   note(
     [
       kv('LLM', `${llm.label}${llm.model ? ` · ${llm.model}` : ''}`),
@@ -314,22 +280,18 @@ export async function runSetup() {
     '로컬에 저장했어요',
   );
 
-  const startNow = guard(
-    await confirm({ message: '바로 대화를 시작할까요?', initialValue: true }),
-  );
+  const startNow = guard(await confirm({ message: '바로 대화를 시작할까요?', initialValue: true }));
   outro(toss('준비가 끝났어요. Biero가 당신의 투자를 도울게요.'));
 
   if (startNow) await runChat({ fromSetup: true });
 }
 
-// ── Status view (`biero` when already configured / `biero config`) ─────────
-export function showStatus() {
+// ── Status view ────────────────────────────────────────────────────────────
+export function showStatus(): void {
   process.stdout.write(banner());
   const cfg = loadConfig();
   if (!cfg) {
-    process.stdout.write(
-      `  ${warn('아직 설정이 없어요.')} ${pc.bold('biero setup')} 으로 시작하세요.\n\n`,
-    );
+    process.stdout.write(`  ${warn('아직 설정이 없어요.')} ${pc.bold('biero setup')} 으로 시작하세요.\n\n`);
     return;
   }
   const lines = [

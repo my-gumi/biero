@@ -59,7 +59,17 @@ Biero: 삼성전자(005930) 현재가는 333,500원이에요. …
 | `biero reset` | 저장된 설정 삭제 |
 | `biero --help` | 도움말 |
 
-> 전역 등록 없이 실행하려면: `node bin/biero.js <command>` 또는 `npm start`.
+> 전역 등록 없이 실행하려면: `npm start` (= `node dist/bin/biero.js`).
+
+## 개발 (Development)
+
+TypeScript로 작성되어 있고, `dist/`로 컴파일됩니다. (`npm install` 시 `prepare`가 자동 빌드)
+
+```bash
+npm run build      # tsc 컴파일 → dist/
+npm run watch      # 변경 감지 빌드
+npm run typecheck  # 타입만 검사 (no emit)
+```
 
 ## 보안 (Security)
 

@@ -1,7 +1,17 @@
 import { getQuote } from './toss.js';
+import type { Config } from './types.js';
+
+export interface ToolDef {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
 
 // OpenAI-style tool definitions exposed to the model.
-export const TOOLS = [
+export const TOOLS: ToolDef[] = [
   {
     type: 'function',
     function: {
@@ -22,11 +32,8 @@ export const TOOLS = [
   },
 ];
 
-/**
- * Execute a tool call by name. Always resolves to a string (JSON or message)
- * suitable to feed back to the model as a tool result.
- */
-export async function runTool(name, args, cfg) {
+/** Execute a tool call by name. Always resolves to a string for the model. */
+export async function runTool(name: string, args: any, cfg: Config): Promise<string> {
   if (name === 'get_stock_price') {
     const symbol = String(args?.symbol ?? '').trim();
     if (!symbol) return JSON.stringify({ error: 'symbol이 필요합니다.' });
@@ -35,7 +42,6 @@ export async function runTool(name, args, cfg) {
     }
     const result = await getQuote({ ...cfg.toss, symbol });
     // Known Toss shape: { result: [ { symbol, lastPrice, currency, timestamp } ] }.
-    // Provide a clean summary for the model, but keep the raw price body as a fallback.
     const priceRow = result?.price?.body?.result?.[0];
     const stockRow = result?.stock?.body?.result?.[0];
     const summary = priceRow

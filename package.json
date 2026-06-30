@@ -4,15 +4,18 @@
   "description": "Behavioral Intelligence for Evaluating Risk & Optimization — a local-first stock AI assistant CLI.",
   "type": "module",
   "bin": {
-    "biero": "bin/biero.js"
+    "biero": "dist/bin/biero.js"
   },
   "files": [
-    "bin",
-    "src"
+    "dist"
   ],
   "scripts": {
-    "start": "node bin/biero.js",
-    "setup": "node bin/biero.js setup"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "watch": "tsc --watch",
+    "start": "node dist/bin/biero.js",
+    "setup": "node dist/bin/biero.js setup",
+    "prepare": "tsc"
   },
   "engines": {
     "node": ">=18"
@@ -20,5 +23,9 @@
   "dependencies": {
     "@clack/prompts": "^0.11.0",
     "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
   }
 }

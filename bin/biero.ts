@@ -10,9 +10,10 @@ import { runChat } from '../src/chat.js';
 import { configExists, clearConfig, CONFIG_PATH } from '../src/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(__dirname, '..');
+// Compiled layout is dist/bin/biero.js → package.json is two levels up.
+const projectRoot = path.resolve(__dirname, '..', '..');
 
-function readPkg() {
+function readPkg(): { name: string; version: string } {
   try {
     return JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
   } catch {
@@ -20,7 +21,7 @@ function readPkg() {
   }
 }
 
-function printHelp() {
+function printHelp(): void {
   const { version } = readPkg();
   process.stdout.write(`
 ${pc.bold('Biero')} v${version} — 리스크 평가 및 최적화를 위한 행동 지능 비서
@@ -40,22 +41,17 @@ ${pc.dim('그냥')} biero ${pc.dim('— 설정돼 있으면 대화, 아니면 �
 `);
 }
 
-async function reset() {
+async function reset(): Promise<void> {
   if (!configExists()) {
     process.stdout.write(`\n  설정이 없어요. 지울 것도 없네요.\n\n`);
     return;
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    process.stdout.write(
-      `\n  대화형 터미널이 필요해요. 터미널에서 직접 ${pc.bold('biero reset')} 을 실행해 주세요.\n\n`,
-    );
+    process.stdout.write(`\n  대화형 터미널이 필요해요. 터미널에서 직접 ${pc.bold('biero reset')} 을 실행해 주세요.\n\n`);
     process.exitCode = 1;
     return;
   }
-  const yes = await confirm({
-    message: `정말 설정을 삭제할까요? (${CONFIG_PATH})`,
-    initialValue: false,
-  });
+  const yes = await confirm({ message: `정말 설정을 삭제할까요? (${CONFIG_PATH})`, initialValue: false });
   if (isCancel(yes) || !yes) {
     process.stdout.write(`\n  취소했어요.\n\n`);
     return;
@@ -64,7 +60,7 @@ async function reset() {
   process.stdout.write(`\n  ${pc.bold('삭제 완료.')} 다시 설정하려면 biero setup 을 실행하세요.\n\n`);
 }
 
-async function main() {
+async function main(): Promise<void> {
   const [cmd] = process.argv.slice(2);
 
   switch (cmd) {
@@ -84,7 +80,6 @@ async function main() {
     case '--help':
       return printHelp();
     case undefined:
-      // Bare `biero`: configured → chat, otherwise → setup wizard.
       return configExists() ? runChat() : runSetup();
     default:
       process.stdout.write(`\n  알 수 없는 명령: ${pc.bold(cmd)}\n`);

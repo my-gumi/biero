@@ -1,5 +1,4 @@
-// Provider-agnostic chat completion. OpenAI-compatible by default;
-// Anthropic uses its own /v1/messages shape.
+import type { ChatMessage, Strategy } from './types.js';
 
 export const SYSTEM_PROMPT =
   '당신은 Biero, 한국어로 대화하는 주식 투자 AI 비서입니다. ' +
@@ -11,10 +10,10 @@ export const SYSTEM_PROMPT =
   '투자 판단의 최종 책임은 사용자에게 있음을 필요할 때 덧붙이세요.';
 
 /** Build an Error from a non-OK fetch Response, including the provider message. */
-export async function httpError(res) {
-  let msg;
+export async function httpError(res: Response): Promise<Error> {
+  let msg: string | undefined;
   try {
-    const e = await res.json();
+    const e: any = await res.json();
     msg = e?.error?.message || (typeof e?.error === 'string' ? e.error : null) || e?.message;
   } catch {
     /* non-JSON body */
@@ -22,18 +21,16 @@ export async function httpError(res) {
   return new Error(`HTTP ${res.status}${msg ? ` — ${msg}` : ''}`);
 }
 
-/**
- * Send a chat turn and return the assistant's text (no tools).
- *
- * @param {object} opts
- * @param {string} opts.strategy  'openai' | 'anthropic' | 'ollama'
- * @param {string} opts.baseURL
- * @param {string} [opts.apiKey]
- * @param {string} opts.model
- * @param {Array<{role:string, content:string}>} opts.messages  user/assistant turns only
- * @returns {Promise<string>}
- */
-export async function chatComplete({ strategy, baseURL, apiKey, model, messages }) {
+export interface ChatOpts {
+  strategy: Strategy;
+  baseURL: string;
+  apiKey?: string;
+  model: string;
+  messages: ChatMessage[];
+}
+
+/** Send a chat turn and return the assistant's text (no tools). */
+export async function chatComplete({ strategy, baseURL, apiKey, model, messages }: ChatOpts): Promise<string> {
   const base = String(baseURL || '').replace(/\/+$/, '');
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 120_000);
@@ -43,15 +40,15 @@ export async function chatComplete({ strategy, baseURL, apiKey, model, messages 
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-api-key': apiKey,
+          'x-api-key': apiKey ?? '',
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({ model, max_tokens: 1024, system: SYSTEM_PROMPT, messages }),
         signal: ctrl.signal,
       });
       if (!res.ok) throw await httpError(res);
-      const data = await res.json();
-      return (data?.content ?? []).map((c) => c.text || '').join('') || '';
+      const data: any = await res.json();
+      return (data?.content ?? []).map((c: any) => c.text || '').join('') || '';
     }
 
     // OpenAI-compatible (openai, openrouter, google, groq, xai, deepseek, mistral, ollama, custom)
@@ -68,10 +65,10 @@ export async function chatComplete({ strategy, baseURL, apiKey, model, messages 
       signal: ctrl.signal,
     });
     if (!res.ok) throw await httpError(res);
-    const data = await res.json();
+    const data: any = await res.json();
     return data?.choices?.[0]?.message?.content ?? '';
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('응답 시간이 초과됐어요 (120s).');
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new Error('응답 시간이 초과됐어요 (120s).');
     throw e;
   } finally {
     clearTimeout(timer);
