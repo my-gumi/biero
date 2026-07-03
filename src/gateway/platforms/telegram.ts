@@ -1,4 +1,4 @@
-import type { Platform, SendResult } from '../../types.js';
+import type { Platform, SendResult } from '../../shared/types.js';
 import { BasePlatformAdapter, type MessageHandler } from './base.js';
 
 // Telegram Bot API adapter using long polling (getUpdates) — no public URL or

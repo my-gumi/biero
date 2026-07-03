@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import type { Platform, SendResult } from '../../types.js';
+import type { Platform, SendResult } from '../../shared/types.js';
 import { BasePlatformAdapter } from './base.js';
 
 // A local stdin/stdout adapter for testing the gateway core without any bot.

@@ -1,7 +1,7 @@
 import pc from 'picocolors';
 
-import { loadConfig, CONFIG_PATH } from '../config.js';
-import { banner, ok, warn, danger, kv } from '../theme.js';
+import { loadConfig, CONFIG_PATH } from '../shared/config.js';
+import { banner, ok, warn, danger, kv } from '../shared/theme.js';
 import { resolveGateway, type ResolvedGateway } from './config.js';
 import { GatewayCore } from './core.js';
 import { SessionStore } from './session.js';

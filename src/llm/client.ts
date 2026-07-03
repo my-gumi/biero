@@ -1,4 +1,4 @@
-import type { ChatMessage, Strategy } from './types.js';
+import type { ChatMessage, Strategy } from '../shared/types.js';
 
 export const SYSTEM_PROMPT =
   '당신은 Biero, 한국어로 대화하는 주식 투자 AI 비서입니다. ' +

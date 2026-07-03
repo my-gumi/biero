@@ -1,5 +1,5 @@
 import type { Client, Message } from 'discord.js';
-import type { Platform, SendResult } from '../../types.js';
+import type { Platform, SendResult } from '../../shared/types.js';
 import { BasePlatformAdapter, type MessageHandler } from './base.js';
 
 // Discord adapter over the Gateway WebSocket via discord.js (Hermes uses

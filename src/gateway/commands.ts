@@ -1,5 +1,5 @@
-import { saveConfig } from '../config.js';
-import type { Config, SessionSource } from '../types.js';
+import { saveConfig } from '../shared/config.js';
+import type { Config, SessionSource } from '../shared/types.js';
 import type { ResolvedGateway } from './config.js';
 import type { SessionStore } from './session.js';
 

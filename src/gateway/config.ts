@@ -1,4 +1,4 @@
-import type { Config, GatewayConfig, PlatformConfig } from '../types.js';
+import type { Config, GatewayConfig, PlatformConfig } from '../shared/types.js';
 
 // Resolved gateway settings: config.json values with env-var overrides applied.
 // Mirrors Hermes' `_apply_env_overrides` — env always wins when present.

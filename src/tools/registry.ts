@@ -1,5 +1,5 @@
-import { getQuote } from './toss.js';
-import type { Config } from './types.js';
+import { getQuote } from '../toss/client.js';
+import type { Config } from '../shared/types.js';
 
 export interface ToolDef {
   type: 'function';

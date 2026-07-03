@@ -1,4 +1,4 @@
-import type { ChatMessage, SessionSource } from '../types.js';
+import type { ChatMessage, SessionSource } from '../shared/types.js';
 
 // Per-conversation history store. Each (platform, userId) pair gets its own
 // message list — the same array handed to runAgent, which appends the reply.

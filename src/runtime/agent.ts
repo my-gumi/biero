@@ -1,7 +1,7 @@
-import { getProvider } from './providers.js';
-import { chatComplete, httpError, SYSTEM_PROMPT } from './llm.js';
-import { TOOLS, runTool } from './tools.js';
-import type { ChatMessage, Config } from './types.js';
+import { getProvider } from '../llm/providers.js';
+import { chatComplete, httpError, SYSTEM_PROMPT } from '../llm/client.js';
+import { TOOLS, runTool } from '../tools/registry.js';
+import type { ChatMessage, Config } from '../shared/types.js';
 
 const MAX_STEPS = 5;
 

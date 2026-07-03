@@ -1,10 +1,10 @@
 import { intro, outro, note, text, spinner, isCancel } from '@clack/prompts';
 import pc from 'picocolors';
 
-import { loadConfig, configExists } from './config.js';
+import { loadConfig, configExists } from '../shared/config.js';
 import { runAgent } from './agent.js';
-import { banner, toss, tossSoft, danger, kv } from './theme.js';
-import type { ChatMessage } from './types.js';
+import { banner, toss, tossSoft, danger, kv } from '../shared/theme.js';
+import type { ChatMessage } from '../shared/types.js';
 
 const EXIT_WORDS = new Set(['/exit', '/quit', '/q', 'exit', 'quit', ':q']);
 

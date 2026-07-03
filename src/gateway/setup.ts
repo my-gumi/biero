@@ -1,9 +1,9 @@
 import { intro, outro, note, text, password, multiselect, isCancel, cancel } from '@clack/prompts';
 import pc from 'picocolors';
 
-import { loadConfig, saveConfig } from '../config.js';
-import { banner, toss, tossSoft, ok, warn, danger, kv } from '../theme.js';
-import type { PlatformConfig } from '../types.js';
+import { loadConfig, saveConfig } from '../shared/config.js';
+import { banner, toss, tossSoft, ok, warn, danger, kv } from '../shared/theme.js';
+import type { PlatformConfig } from '../shared/types.js';
 
 // `biero gateway setup` — the user pastes their OWN bot tokens here; nothing is
 // hardcoded. Saved to ~/.biero/config.json (0600). Env vars override at runtime.

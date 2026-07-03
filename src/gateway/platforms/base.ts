@@ -1,4 +1,4 @@
-import type { InboundEvent, Platform, SendResult } from '../../types.js';
+import type { InboundEvent, Platform, SendResult } from '../../shared/types.js';
 
 // Common contract every messenger adapter implements, modelled on Hermes'
 // BasePlatformAdapter. The core wires one `MessageHandler` into each adapter;

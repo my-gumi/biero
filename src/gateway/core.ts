@@ -1,5 +1,5 @@
-import { runAgent } from '../agent.js';
-import type { Config, InboundEvent, SessionSource } from '../types.js';
+import { runAgent } from '../runtime/agent.js';
+import type { Config, InboundEvent, SessionSource } from '../shared/types.js';
 import { isAllowed } from './authz.js';
 import { handleCommand, parseCommand } from './commands.js';
 import type { ResolvedGateway } from './config.js';

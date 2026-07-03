@@ -1,4 +1,4 @@
-import type { Provider } from './types.js';
+import type { Provider } from '../shared/types.js';
 
 export const PROVIDERS: Provider[] = [
   { id: 'openai', label: 'OpenAI', hint: 'gpt-4o, gpt-4.1 …', baseURL: 'https://api.openai.com/v1', needsKey: true, strategy: 'openai' },

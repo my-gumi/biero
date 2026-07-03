@@ -5,11 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { confirm, isCancel } from '@clack/prompts';
 import pc from 'picocolors';
 
-import { runSetup, showStatus } from '../src/setup.js';
-import { runChat } from '../src/chat.js';
+import { runSetup, showStatus } from '../src/app/setup.js';
+import { runChat } from '../src/runtime/chat.js';
 import { runGatewaySetup } from '../src/gateway/setup.js';
 import { runGateway, showGatewayStatus } from '../src/gateway/run.js';
-import { configExists, clearConfig, CONFIG_PATH } from '../src/config.js';
+import { configExists, clearConfig, CONFIG_PATH } from '../src/shared/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Compiled layout is dist/bin/biero.js → package.json is two levels up.

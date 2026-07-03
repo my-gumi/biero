@@ -12,12 +12,12 @@ import {
 } from '@clack/prompts';
 import pc from 'picocolors';
 
-import { PROVIDERS, getProvider, validateLLM, curateModels } from './providers.js';
-import { validateTossCredentials, TOSS_BASE_URL } from './toss.js';
-import { runChat } from './chat.js';
-import { saveConfig, loadConfig, configExists, CONFIG_PATH, maskSecret } from './config.js';
-import { banner, toss, tossSoft, ok, warn, danger, kv } from './theme.js';
-import type { Config, LlmConfig, TossConfig } from './types.js';
+import { PROVIDERS, getProvider, validateLLM, curateModels } from '../llm/providers.js';
+import { validateTossCredentials, TOSS_BASE_URL } from '../toss/client.js';
+import { runChat } from '../runtime/chat.js';
+import { saveConfig, loadConfig, configExists, CONFIG_PATH, maskSecret } from '../shared/config.js';
+import { banner, toss, tossSoft, ok, warn, danger, kv } from '../shared/theme.js';
+import type { Config, LlmConfig, TossConfig } from '../shared/types.js';
 
 // Bail out cleanly when the user hits Ctrl+C / ESC on any prompt.
 function guard<T>(value: T | symbol): T {
