@@ -7,6 +7,8 @@ import pc from 'picocolors';
 
 import { runSetup, showStatus } from '../src/setup.js';
 import { runChat } from '../src/chat.js';
+import { runGatewaySetup } from '../src/gateway/setup.js';
+import { runGateway, showGatewayStatus } from '../src/gateway/run.js';
 import { configExists, clearConfig, CONFIG_PATH } from '../src/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +34,7 @@ ${pc.dim('사용법')}
 ${pc.dim('명령')}
   chat             AI 비서와 대화 (LLM에 바로 요청·응답)
   setup            LLM 공급자 · 토스증권 API 키를 설정 (대화형)
+  gateway          메신저(텔레그램·디스코드) 원격 비서 — setup · start · status
   config, status   현재 설정 보기
   reset            저장된 설정 삭제
   -v, --version    버전 출력
@@ -60,6 +63,40 @@ async function reset(): Promise<void> {
   process.stdout.write(`\n  ${pc.bold('삭제 완료.')} 다시 설정하려면 biero setup 을 실행하세요.\n\n`);
 }
 
+function gatewayHelp(): void {
+  process.stdout.write(`
+${pc.bold('biero gateway')} — 메신저 원격 비서 (백그라운드 상주)
+
+${pc.dim('하위 명령')}
+  setup    텔레그램·디스코드 봇 토큰과 허용 사용자를 설정 (대화형)
+  start    게이트웨이 상주 프로세스 시작 ${pc.dim('(--stdin: 로컬 테스트 어댑터 강제)')}
+  status   현재 게이트웨이 설정 보기
+
+${pc.dim('백그라운드로 띄우려면:')} ${pc.bold('nohup biero gateway start >~/.biero/gateway.log 2>&1 &')}
+`);
+}
+
+async function runGatewayCommand(): Promise<void> {
+  const sub = process.argv[3];
+  const flags = process.argv.slice(4);
+  switch (sub) {
+    case 'setup':
+      return runGatewaySetup();
+    case 'start':
+      return runGateway({ stdin: flags.includes('--stdin') });
+    case 'status':
+      return showGatewayStatus();
+    case undefined:
+    case '-h':
+    case '--help':
+      return gatewayHelp();
+    default:
+      process.stdout.write(`\n  알 수 없는 gateway 명령: ${pc.bold(sub)}\n`);
+      gatewayHelp();
+      process.exitCode = 1;
+  }
+}
+
 async function main(): Promise<void> {
   const [cmd] = process.argv.slice(2);
 
@@ -68,6 +105,8 @@ async function main(): Promise<void> {
       return runSetup();
     case 'chat':
       return runChat();
+    case 'gateway':
+      return runGatewayCommand();
     case 'config':
     case 'status':
       return showStatus();
