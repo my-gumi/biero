@@ -55,11 +55,71 @@ Biero: 삼성전자(005930) 현재가는 333,500원이에요. …
 | `biero` | 설정돼 있으면 대화, 아니면 설정 위저드 |
 | `biero chat` | AI 비서와 대화 (LLM에 바로 요청·응답, 시세 도구 사용) |
 | `biero setup` | LLM 공급자 · 토스 API 키 설정 (대화형) |
+| `biero gateway setup` | 텔레그램 · 디스코드 봇 토큰과 허용 사용자 설정 (대화형) |
+| `biero gateway start` | 메신저 게이트웨이 상주 프로세스 시작 |
+| `biero gateway status` | 게이트웨이 설정 상태 보기 |
 | `biero config` | 현재 설정 보기 (키는 마스킹) |
 | `biero reset` | 저장된 설정 삭제 |
 | `biero --help` | 도움말 |
 
 > 전역 등록 없이 실행하려면: `npm start` (= `node dist/bin/biero.js`).
+
+## 메신저 원격 비서 (Gateway)
+
+PC를 켜둔 채, **텔레그램·디스코드 봇으로 어디서든 비서에게 시세를 물어보세요.** 게이트웨이는 상주 프로세스로 떠서 메신저로 들어온 메시지를 그대로 `biero chat`과 같은 엔진(LLM + 토스 시세 도구)에 넘기고, 답을 회신합니다. 여러 메신저를 하나의 프로세스가 함께 처리합니다.
+
+| 텔레그램 | 디스코드 |
+| --- | --- |
+| ![Telegram](docs/telegram.png) | ![Discord](docs/discord.png) |
+
+### 1. 봇 만들기 (토큰 발급)
+
+**텔레그램** — [@BotFather](https://t.me/BotFather)에게 `/newbot` → 이름·username 입력 → **Bot Token**(`숫자:영문…`)을 받습니다.
+
+**디스코드** — [Discord Developer Portal](https://discord.com/developers/applications) → **New Application** → 왼쪽 **Bot** 탭에서:
+- `Reset Token` → **Bot Token** 복사 (한 번만 보임)
+- **MESSAGE CONTENT INTENT** 토글을 **ON** (안 켜면 메시지 내용을 못 읽습니다)
+- **OAuth2 → URL 생성기**에서 `bot` 스코프 + `채널 보기`·`메시지 보내기`·`메시지 기록 보기` 권한으로 초대 링크를 만들어 봇을 서버에 초대
+
+### 2. 게이트웨이 설정
+
+```bash
+biero gateway setup
+```
+
+연결할 메신저를 고르고, 각 **봇 토큰**과 **허용 사용자 ID**(쉼표로 구분)를 입력합니다. 설정은 `~/.biero/config.json`(권한 600)에 저장돼요.
+
+> **허용 사용자(화이트리스트)** 는 원격 입력이 LLM·시세 도구를 구동하므로 유일한 방어선입니다. 비워두면 아무도 사용할 수 없고(보안 기본값), `*` 를 넣으면 전원 허용입니다.
+
+내 사용자 ID를 모르면, 일단 봇에게 아무 메시지나 보내세요. 게이트웨이 로그에 `거부: userId=…` 로 찍히거나, 메신저에서 **`/whoami`** 로 확인할 수 있습니다. 그 ID를 화이트리스트에 넣고 다시 시작하면 됩니다.
+
+### 3. 상주 실행
+
+```bash
+biero gateway start
+```
+
+포그라운드로 떠서 연결된 봇으로 대기합니다. 컴퓨터 백그라운드로 계속 돌리려면:
+
+```bash
+nohup biero gateway start >~/.biero/gateway.log 2>&1 &
+```
+
+종료는 `Ctrl+C`(포그라운드) 또는 프로세스 종료(백그라운드). 상태는 `biero gateway status` 로 확인합니다.
+
+### 메신저 내 명령
+
+| 명령 | 설명 |
+| --- | --- |
+| `/help` | 명령 도움말 |
+| `/status` | 연결·모델 상태 |
+| `/whoami` | 내 사용자 ID (화이트리스트 등록용) |
+| `/reset` | 이 대화의 기록 초기화 |
+| `/sethome` | (텔레그램) 이 채팅을 홈 채널로 지정 |
+
+그 밖의 메시지는 바로 비서에게 전달됩니다. (예: `삼성전자 주가 알려줘`)
+
+> **환경변수 오버라이드** — `TELEGRAM_BOT_TOKEN` · `TELEGRAM_ALLOWED_USERS` · `TELEGRAM_HOME_CHAT` · `DISCORD_BOT_TOKEN` · `DISCORD_ALLOWED_USERS` 가 있으면 `config.json` 값보다 우선합니다.
 
 ## 개발 (Development)
 
@@ -78,4 +138,4 @@ npm run typecheck  # 타입만 검사 (no emit)
 
 ## 상태 (Status)
 
-초기 개발 단계입니다. 현재는 **설정 → 대화 → 시세 조회**까지 동작합니다. (잔고·매수가능금액·주문 연동은 예정)
+초기 개발 단계입니다. 현재는 **설정 → 대화 → 시세 조회**, 그리고 **텔레그램·디스코드 원격 비서(게이트웨이)** 까지 동작합니다. (잔고·매수가능금액·주문 연동은 예정)
