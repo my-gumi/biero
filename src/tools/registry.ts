@@ -1,4 +1,4 @@
-import { getQuote } from '../toss/client.js';
+import { getHoldings, getQuote } from '../toss/client.js';
 import type { Config } from '../shared/types.js';
 
 export interface ToolDef {
@@ -26,6 +26,26 @@ export const TOOLS: ToolDef[] = [
           symbol: { type: 'string', description: '종목 심볼 (국내 6자리 코드 또는 미국 티커)' },
         },
         required: ['symbol'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_holdings',
+      description:
+        '선택된 토스증권 계좌의 보유 주식을 조회한다. symbol을 주면 해당 종목만 필터링한다. ' +
+        '보유 종목, 평가금액, 손익, 일간 손익을 확인할 때 사용한다.',
+      parameters: {
+        type: 'object',
+        properties: {
+          symbol: {
+            type: 'string',
+            description: '선택 사항. 종목 심볼 (국내 6자리 코드 또는 미국 티커). 비우면 전체 보유 종목 조회.',
+          },
+        },
+        required: [],
         additionalProperties: false,
       },
     },
@@ -64,5 +84,33 @@ export async function runTool(name: string, args: any, cfg: Config): Promise<str
         : (result?.stock?.body ?? result?.stock),
     }).slice(0, 4000);
   }
+
+  if (name === 'get_holdings') {
+    const symbol = String(args?.symbol ?? '').trim();
+    if (!cfg?.toss?.clientId || !cfg?.toss?.clientSecret) {
+      return JSON.stringify({ error: '토스 API 키가 설정되어 있지 않습니다. biero setup 을 실행하세요.' });
+    }
+    if (!cfg?.toss?.accountSeq) {
+      return JSON.stringify({ error: '선택된 토스 계좌가 없습니다. biero setup 에서 계좌를 선택해 주세요.' });
+    }
+
+    const result = await getHoldings({
+      ...cfg.toss,
+      accountSeq: cfg.toss.accountSeq,
+      ...(symbol ? { symbol } : {}),
+    });
+
+    return JSON.stringify({
+      ok: result.ok,
+      symbol: symbol || null,
+      accountSeq: cfg.toss.accountSeq,
+      accountLabel: cfg.toss.accountLabel ?? null,
+      summary: result.summary ?? null,
+      holdings: result.body?.result?.items ?? [],
+      raw: result.body ?? result,
+      error: result.error ?? null,
+    }).slice(0, 4000);
+  }
+
   return JSON.stringify({ error: `알 수 없는 도구: ${name}` });
 }
