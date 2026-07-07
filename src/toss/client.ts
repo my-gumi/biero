@@ -41,6 +41,22 @@ export interface TossAccountsResult {
   error?: string;
 }
 
+export interface TossHoldingsSummary {
+  totalPurchaseAmount?: any;
+  marketValue?: any;
+  profitLoss?: any;
+  dailyProfitLoss?: any;
+  itemCount: number;
+}
+
+export interface TossHoldingsResult {
+  ok: boolean;
+  status?: number;
+  body?: any;
+  summary?: TossHoldingsSummary;
+  error?: string;
+}
+
 interface TossCreds {
   clientId: string;
   clientSecret: string;
@@ -103,6 +119,18 @@ function normalizeAccounts(body: any): TossAccountItem[] {
       } satisfies TossAccountItem;
     })
     .filter((row: TossAccountItem | null): row is TossAccountItem => Boolean(row));
+}
+
+function summarizeHoldings(body: any): TossHoldingsSummary {
+  const result = body?.result ?? {};
+  const items = Array.isArray(result?.items) ? result.items : [];
+  return {
+    totalPurchaseAmount: result?.totalPurchaseAmount ?? null,
+    marketValue: result?.marketValue ?? null,
+    profitLoss: result?.profitLoss ?? null,
+    dailyProfitLoss: result?.dailyProfitLoss ?? null,
+    itemCount: items.length,
+  };
 }
 
 export function buildTossHeaders(token: string, opts: { accountSeq?: string } = {}): Record<string, string> {
@@ -219,6 +247,43 @@ export async function getAccounts({
     status: res.status,
     body: res.body,
     accounts: normalizeAccounts(res.body),
+  };
+}
+
+export async function getHoldings({
+  clientId,
+  clientSecret,
+  baseURL = TOSS_BASE_URL,
+  accountSeq,
+  symbol,
+}: TossCreds & { accountSeq: string; symbol?: string }): Promise<TossHoldingsResult> {
+  let token: string;
+  try {
+    token = await getAccessToken({ clientId, clientSecret, baseURL });
+  } catch (e: any) {
+    return { ok: false, error: e?.message };
+  }
+
+  const base = baseURL.replace(/\/+$/, '');
+  const url = new URL(`${base}/api/v1/holdings`);
+  const cleanSymbol = String(symbol ?? '').trim();
+  if (cleanSymbol) url.searchParams.set('symbol', cleanSymbol);
+
+  const res = await tossGetJson(url.toString(), buildTossHeaders(token, { accountSeq }));
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      body: res.body,
+      error: res.error || res.body?.error?.message || res.body?.message,
+    };
+  }
+
+  return {
+    ok: true,
+    status: res.status,
+    body: res.body,
+    summary: summarizeHoldings(res.body),
   };
 }
 
