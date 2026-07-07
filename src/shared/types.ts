@@ -24,6 +24,8 @@ export interface TossConfig {
   clientSecret: string;
   baseURL?: string;
   verified?: boolean;
+  accountSeq?: string;
+  accountLabel?: string;
 }
 
 export interface Config {
