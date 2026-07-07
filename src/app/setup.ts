@@ -13,7 +13,7 @@ import {
 import pc from 'picocolors';
 
 import { PROVIDERS, getProvider, validateLLM, curateModels } from '../llm/providers.js';
-import { validateTossCredentials, TOSS_BASE_URL } from '../toss/client.js';
+import { validateTossCredentials, TOSS_BASE_URL, getAccounts } from '../toss/client.js';
 import { runChat } from '../runtime/chat.js';
 import { saveConfig, loadConfig, configExists, CONFIG_PATH, maskSecret } from '../shared/config.js';
 import { banner, toss, tossSoft, ok, warn, danger, kv } from '../shared/theme.js';
@@ -227,6 +227,58 @@ async function stepToss(): Promise<TossConfig> {
   return { clientId, clientSecret, baseURL: TOSS_BASE_URL, verified };
 }
 
+async function stepTossAccount(creds: TossConfig): Promise<Pick<TossConfig, 'accountSeq' | 'accountLabel'>> {
+  for (;;) {
+    const s = spinner();
+    s.start('토스증권 계좌 목록을 조회하는 중…');
+    const res = await getAccounts(creds);
+
+    if (res.ok) {
+      const accounts = res.accounts ?? [];
+      s.stop(ok(`계좌 목록 조회 성공${accounts.length ? ` · ${accounts.length}개` : ''}`));
+
+      if (!accounts.length) {
+        note('조회된 계좌가 없어 선택 없이 저장할게요.', '계좌 선택');
+        return {};
+      }
+
+      const picked = guard(
+        await select({
+          message: '기본으로 사용할 토스 계좌를 선택하세요',
+          options: accounts.map((account) => ({
+            value: account.accountSeq,
+            label: account.label,
+            hint: account.accountSeq,
+          })),
+          initialValue: accounts[0]?.accountSeq,
+        }),
+      );
+      const chosen = accounts.find((account) => account.accountSeq === picked) ?? accounts[0];
+      return chosen ? { accountSeq: chosen.accountSeq, accountLabel: chosen.label } : {};
+    }
+
+    const detail = [res.status && `HTTP ${res.status}`, res.error].filter(Boolean).join(' · ');
+    s.stop(danger(`계좌 목록 조회 실패${detail ? ` — ${detail}` : ''}`));
+
+    const choice = guard(
+      await select({
+        message: '어떻게 할까요?',
+        options: [
+          { value: 'retry', label: '다시 조회' },
+          { value: 'skip', label: '계좌 선택 없이 저장' },
+          { value: 'quit', label: '종료' },
+        ],
+        initialValue: 'retry',
+      }),
+    );
+    if (choice === 'skip') return {};
+    if (choice === 'quit') {
+      cancel('설정을 종료했어요.');
+      process.exit(0);
+    }
+  }
+}
+
 // ── Orchestration ─────────────────────────────────────────────────────────
 export async function runSetup(): Promise<void> {
   process.stdout.write(banner());
@@ -256,13 +308,14 @@ export async function runSetup(): Promise<void> {
 
   const llm = await stepLLM();
   const tossCreds = await stepToss();
+  const tossAccount = await stepTossAccount(tossCreds);
 
   const now = new Date().toISOString();
   const existing = loadConfig();
   const config: Config = {
     version: 1,
     llm,
-    toss: tossCreds,
+    toss: { ...tossCreds, ...tossAccount },
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
@@ -274,6 +327,7 @@ export async function runSetup(): Promise<void> {
     [
       kv('LLM', `${llm.label}${llm.model ? ` · ${llm.model}` : ''}`),
       kv('Toss API Key', `${maskSecret(tossCreds.clientId)} ${tossCreds.verified ? ok('· 확인됨') : warn('· 미확인')}`),
+      kv('Toss 계좌', config.toss.accountLabel ?? config.toss.accountSeq ?? warn('선택 안 함')),
       kv('저장 위치', savedPath),
       kv('파일 권한', permLabel),
     ].join('\n'),
@@ -303,6 +357,7 @@ export function showStatus(): void {
     '',
     kv('Toss API Key', cfg.toss?.clientId ? maskSecret(cfg.toss.clientId) : pc.dim('(없음)')),
     kv('Toss 확인', cfg.toss?.verified ? ok('확인됨') : warn('미확인')),
+    kv('Toss 계좌', cfg.toss?.accountLabel ?? cfg.toss?.accountSeq ?? warn('미선택')),
     '',
     kv('설정 파일', CONFIG_PATH),
     kv('업데이트', cfg.updatedAt ?? '-'),

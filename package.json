@@ -15,6 +15,7 @@
     "watch": "tsc --watch",
     "start": "node dist/bin/biero.js",
     "setup": "node dist/bin/biero.js setup",
+    "test": "node --test tests/*.mjs",
     "prepare": "tsc"
   },
   "engines": {

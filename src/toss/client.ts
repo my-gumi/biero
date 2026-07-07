@@ -27,6 +27,20 @@ export interface Quote {
   error?: string;
 }
 
+export interface TossAccountItem {
+  accountSeq: string;
+  label: string;
+  raw: any;
+}
+
+export interface TossAccountsResult {
+  ok: boolean;
+  status?: number;
+  accounts?: TossAccountItem[];
+  body?: any;
+  error?: string;
+}
+
 interface TossCreds {
   clientId: string;
   clientSecret: string;
@@ -37,6 +51,65 @@ function abortable(ms: number): { signal: AbortSignal; done: () => void } {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
   return { signal: ctrl.signal, done: () => clearTimeout(timer) };
+}
+
+function compactUnique(values: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function pickAccountSeq(row: any): string {
+  return String(
+    row?.accountSeq ?? row?.account?.accountSeq ?? row?.account?.seq ?? row?.accountNumber ?? row?.accountNo ?? '',
+  ).trim();
+}
+
+function buildAccountLabel(row: any, accountSeq: string): string {
+  const parts = compactUnique([
+    row?.accountName,
+    row?.productName,
+    row?.accountTypeName,
+    row?.accountNumber,
+    row?.accountNo,
+    accountSeq,
+  ]);
+  return parts.join(' · ') || accountSeq;
+}
+
+function normalizeAccounts(body: any): TossAccountItem[] {
+  const rows = Array.isArray(body?.result)
+    ? body.result
+    : Array.isArray(body?.results)
+      ? body.results
+      : Array.isArray(body?.accounts)
+        ? body.accounts
+        : [];
+
+  return rows
+    .map((row: any) => {
+      const accountSeq = pickAccountSeq(row);
+      if (!accountSeq) return null;
+      return {
+        accountSeq,
+        label: buildAccountLabel(row, accountSeq),
+        raw: row,
+      } satisfies TossAccountItem;
+    })
+    .filter((row: TossAccountItem | null): row is TossAccountItem => Boolean(row));
+}
+
+export function buildTossHeaders(token: string, opts: { accountSeq?: string } = {}): Record<string, string> {
+  const headers: Record<string, string> = { authorization: ['Bearer', token].join(' ') };
+  const accountSeq = String(opts.accountSeq ?? '').trim();
+  if (accountSeq) headers['X-Tossinvest-Account'] = accountSeq;
+  return headers;
 }
 
 /**
@@ -118,6 +191,37 @@ async function tossGetJson(url: string, headers: Record<string, string>): Promis
   }
 }
 
+export async function getAccounts({
+  clientId,
+  clientSecret,
+  baseURL = TOSS_BASE_URL,
+}: TossCreds): Promise<TossAccountsResult> {
+  let token: string;
+  try {
+    token = await getAccessToken({ clientId, clientSecret, baseURL });
+  } catch (e: any) {
+    return { ok: false, error: e?.message };
+  }
+
+  const base = baseURL.replace(/\/+$/, '');
+  const res = await tossGetJson(`${base}/api/v1/accounts`, buildTossHeaders(token));
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      body: res.body,
+      error: res.error || res.body?.error?.message || res.body?.message,
+    };
+  }
+
+  return {
+    ok: true,
+    status: res.status,
+    body: res.body,
+    accounts: normalizeAccounts(res.body),
+  };
+}
+
 /**
  * Fetch a current quote for a symbol. Returns the RAW Toss responses so the
  * caller/LLM can interpret them without us hard-coding the response schema.
@@ -135,7 +239,7 @@ export async function getQuote({
     return { ok: false, symbol, error: e?.message };
   }
   const base = baseURL.replace(/\/+$/, '');
-  const headers = { authorization: `Bearer ${token}` };
+  const headers = buildTossHeaders(token);
   const sym = encodeURIComponent(symbol);
   const [price, stock] = await Promise.all([
     tossGetJson(`${base}/api/v1/prices?symbols=${sym}`, headers),
