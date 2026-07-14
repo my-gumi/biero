@@ -12,11 +12,20 @@ export interface TossValidation {
   message?: string;
 }
 
+/** Toss rate-limit snapshot, parsed from X-RateLimit-* response headers. */
+export interface RateLimit {
+  limit?: number;
+  remaining?: number;
+  reset?: number;
+  retryAfter?: number;
+}
+
 export interface TossHttp {
   ok: boolean;
   status?: number;
   body?: any;
   error?: string;
+  rateLimit?: RateLimit;
 }
 
 export interface Quote {
@@ -186,14 +195,12 @@ export async function validateTossCredentials({
 
 // ── Access token cache ─────────────────────────────────────────────────────
 let tokenCache: { key: string; token: string; expiresAt: number } | null = null;
+// Single-flight guard: concurrent callers share one issuance. Toss invalidates
+// the previous token when a new one is issued (client_credentials, single
+// active token), so parallel requests must NOT each issue their own.
+let tokenInflight: { key: string; promise: Promise<string> } | null = null;
 
-/** Get a valid access token, reusing a cached one until ~5s before expiry. */
-export async function getAccessToken({ clientId, clientSecret, baseURL = TOSS_BASE_URL }: TossCreds): Promise<string> {
-  const key = `${baseURL}::${clientId}`;
-  const now = Date.now();
-  if (tokenCache && tokenCache.key === key && tokenCache.expiresAt > now + 5_000) {
-    return tokenCache.token;
-  }
+async function issueToken({ clientId, clientSecret, baseURL, key }: TossCreds & { key: string }): Promise<string> {
   const res = await validateTossCredentials({ clientId, clientSecret, baseURL });
   if (!res.ok || !res.token) {
     const bits = [res.status && `HTTP ${res.status}`, res.code, res.message].filter(Boolean).join(' · ');
@@ -202,21 +209,102 @@ export async function getAccessToken({ clientId, clientSecret, baseURL = TOSS_BA
     throw err;
   }
   const ttl = res.expiresIn ? res.expiresIn * 1000 : 600_000;
-  tokenCache = { key, token: res.token, expiresAt: now + ttl };
+  tokenCache = { key, token: res.token, expiresAt: Date.now() + ttl };
   return res.token;
 }
 
-async function tossGetJson(url: string, headers: Record<string, string>): Promise<TossHttp> {
-  const t = abortable(10_000);
-  try {
-    const res = await fetch(url, { headers, signal: t.signal });
-    const body = await res.json().catch(() => null);
-    return { ok: res.ok, status: res.status, body };
-  } catch (e: any) {
-    return { ok: false, error: e?.name === 'AbortError' ? '시간 초과' : e?.message };
-  } finally {
-    t.done();
+/** Get a valid access token, reusing a cached one until ~5s before expiry. */
+export async function getAccessToken({ clientId, clientSecret, baseURL = TOSS_BASE_URL }: TossCreds): Promise<string> {
+  const key = `${baseURL}::${clientId}`;
+  const now = Date.now();
+  if (tokenCache && tokenCache.key === key && tokenCache.expiresAt > now + 5_000) {
+    return tokenCache.token;
   }
+  // Coalesce concurrent cold-cache issuances into a single request.
+  if (tokenInflight && tokenInflight.key === key) return tokenInflight.promise;
+  const promise = issueToken({ clientId, clientSecret, baseURL, key }).finally(() => {
+    if (tokenInflight?.key === key) tokenInflight = null;
+  });
+  tokenInflight = { key, promise };
+  return promise;
+}
+
+const RATE_LIMIT_MAX_RETRIES = 3;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRateLimit(headers: Headers | undefined): RateLimit {
+  if (!headers || typeof headers.get !== 'function') return {};
+  const num = (name: string): number | undefined => {
+    const raw = headers.get(name);
+    if (raw == null || raw === '') return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  return {
+    limit: num('x-ratelimit-limit'),
+    remaining: num('x-ratelimit-remaining'),
+    reset: num('x-ratelimit-reset'),
+    retryAfter: num('retry-after'),
+  };
+}
+
+/**
+ * Compute the backoff delay (ms) before retrying a 429. Honors `Retry-After`
+ * (falling back to `X-RateLimit-Reset`), otherwise exponential 1s→2s→4s, plus
+ * jitter to avoid thundering-herd retries.
+ */
+function retryDelayMs(rateLimit: RateLimit, attempt: number): number {
+  const hinted = rateLimit.retryAfter ?? rateLimit.reset;
+  const baseSeconds = hinted != null && hinted > 0 ? hinted : 2 ** attempt;
+  const jitter = Math.floor(Math.random() * 250);
+  return Math.min(baseSeconds * 1000, 10_000) + jitter;
+}
+
+async function tossGetJson(url: string, headers: Record<string, string>): Promise<TossHttp> {
+  let lastError: string | undefined;
+  for (let attempt = 0; attempt <= RATE_LIMIT_MAX_RETRIES; attempt++) {
+    const t = abortable(10_000);
+    try {
+      const res = await fetch(url, { headers, signal: t.signal });
+      const rateLimit = parseRateLimit(res.headers);
+      if (res.status === 429 && attempt < RATE_LIMIT_MAX_RETRIES) {
+        await sleep(retryDelayMs(rateLimit, attempt));
+        continue;
+      }
+      const body = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, body, rateLimit };
+    } catch (e: any) {
+      lastError = e?.name === 'AbortError' ? '시간 초과' : e?.message;
+      return { ok: false, error: lastError };
+    } finally {
+      t.done();
+    }
+  }
+  return { ok: false, status: 429, error: lastError ?? '레이트리밋 초과 (429)' };
+}
+
+/**
+ * Authenticated GET against the Toss Open API. Resolves an access token
+ * (cached), builds standard headers, and delegates to {@link tossGetJson}
+ * (which transparently retries on 429). Returns the RAW Toss response so the
+ * caller/LLM can interpret the payload.
+ */
+async function authedGet(
+  { clientId, clientSecret, baseURL = TOSS_BASE_URL }: TossCreds,
+  path: string,
+  opts: { accountSeq?: string } = {},
+): Promise<TossHttp> {
+  let token: string;
+  try {
+    token = await getAccessToken({ clientId, clientSecret, baseURL });
+  } catch (e: any) {
+    return { ok: false, error: e?.message };
+  }
+  const base = baseURL.replace(/\/+$/, '');
+  return tossGetJson(`${base}${path}`, buildTossHeaders(token, { accountSeq: opts.accountSeq }));
 }
 
 export async function getAccounts({
@@ -311,4 +399,106 @@ export async function getQuote({
     tossGetJson(`${base}/api/v1/stocks?symbols=${sym}`, headers),
   ]);
   return { ok: true, symbol, price, stock };
+}
+
+// ── Query-string helper ────────────────────────────────────────────────────
+function qs(params: Record<string, string | number | boolean | undefined | null>): string {
+  const sp = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '') continue;
+    sp.set(key, String(value));
+  }
+  const s = sp.toString();
+  return s ? `?${s}` : '';
+}
+
+type Currency = 'KRW' | 'USD';
+
+// ── Order info (#6, #7) — require account context ───────────────────────────
+
+/** Cash buying power for the selected account, in the requested currency. */
+export function getBuyingPower(
+  creds: TossCreds & { accountSeq: string; currency?: Currency },
+): Promise<TossHttp> {
+  const currency = creds.currency ?? 'KRW';
+  return authedGet(creds, `/api/v1/buying-power${qs({ currency })}`, { accountSeq: creds.accountSeq });
+}
+
+/** Quantity of `symbol` the selected account can currently sell. */
+export function getSellableQuantity(
+  creds: TossCreds & { accountSeq: string; symbol: string },
+): Promise<TossHttp> {
+  return authedGet(creds, `/api/v1/sellable-quantity${qs({ symbol: creds.symbol })}`, {
+    accountSeq: creds.accountSeq,
+  });
+}
+
+/** Trading commission rates (KR·US) for the selected account. */
+export function getCommissions(creds: TossCreds & { accountSeq: string }): Promise<TossHttp> {
+  return authedGet(creds, '/api/v1/commissions', { accountSeq: creds.accountSeq });
+}
+
+// ── Market info (#12) — no account context ──────────────────────────────────
+
+/** Exchange rate for a currency pair (defaults USD→KRW). */
+export function getExchangeRate(
+  creds: TossCreds & { baseCurrency?: Currency; quoteCurrency?: Currency },
+): Promise<TossHttp> {
+  const baseCurrency = creds.baseCurrency ?? 'USD';
+  const quoteCurrency = creds.quoteCurrency ?? 'KRW';
+  return authedGet(creds, `/api/v1/exchange-rate${qs({ baseCurrency, quoteCurrency })}`);
+}
+
+/** Market operating hours / holidays for KR or US. */
+export function getMarketCalendar(creds: TossCreds & { country: 'KR' | 'US' }): Promise<TossHttp> {
+  return authedGet(creds, `/api/v1/market-calendar/${creds.country}`);
+}
+
+// ── Market data (#10) — no account context ──────────────────────────────────
+
+/** Order book (호가) — bid/ask ladder for `symbol`. */
+export function getOrderbook(creds: TossCreds & { symbol: string }): Promise<TossHttp> {
+  return authedGet(creds, `/api/v1/orderbook${qs({ symbol: creds.symbol })}`);
+}
+
+/** Recent trades (체결) for `symbol`. `count` caps how many are returned. */
+export function getTrades(creds: TossCreds & { symbol: string; count?: number }): Promise<TossHttp> {
+  return authedGet(creds, `/api/v1/trades${qs({ symbol: creds.symbol, count: creds.count })}`);
+}
+
+/** OHLCV candles (캔들) for `symbol`. `interval` is '1m' or '1d' (default '1d'). */
+export function getCandles(
+  creds: TossCreds & { symbol: string; interval?: '1m' | '1d'; count?: number; before?: string },
+): Promise<TossHttp> {
+  const interval = creds.interval ?? '1d';
+  return authedGet(
+    creds,
+    `/api/v1/candles${qs({ symbol: creds.symbol, interval, count: creds.count, before: creds.before })}`,
+  );
+}
+
+/** Upper/lower price limits (상·하한가) for `symbol`. */
+export function getPriceLimits(creds: TossCreds & { symbol: string }): Promise<TossHttp> {
+  return authedGet(creds, `/api/v1/price-limits${qs({ symbol: creds.symbol })}`);
+}
+
+// ── Stock info (#11) — no account context ───────────────────────────────────
+
+/**
+ * Canonical stock info + purchase warnings (유의사항) for `symbol`. Lets the
+ * model confirm a guessed symbol resolves to the expected name before acting.
+ */
+export async function getStockInfo(creds: TossCreds & { symbol: string }): Promise<{
+  ok: boolean;
+  symbol: string;
+  stock?: TossHttp;
+  warnings?: TossHttp;
+  error?: string;
+}> {
+  const sym = encodeURIComponent(creds.symbol);
+  const [stock, warnings] = await Promise.all([
+    authedGet(creds, `/api/v1/stocks${qs({ symbols: creds.symbol })}`),
+    authedGet(creds, `/api/v1/stocks/${sym}/warnings`),
+  ]);
+  return { ok: stock.ok || warnings.ok, symbol: creds.symbol, stock, warnings };
 }
