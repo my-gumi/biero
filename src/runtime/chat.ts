@@ -1,45 +1,86 @@
-import { intro, outro, note, text, spinner, isCancel } from '@clack/prompts';
+import readline from 'node:readline';
 import pc from 'picocolors';
 
 import { loadConfig, configExists } from '../shared/config.js';
 import { runAgent } from './agent.js';
 import { loadHistory, saveHistory, clearHistory } from './history.js';
-import { banner, toss, tossSoft, danger, kv } from '../shared/theme.js';
+import { wordmark, toss, tossSoft, danger } from '../shared/theme.js';
 import type { ChatMessage } from '../shared/types.js';
 
 const EXIT_WORDS = new Set(['/exit', '/quit', '/q', 'exit', 'quit', ':q']);
 const RESET_WORDS = new Set(['/reset', '/new', '/clear']);
 
-/** Friendly status shown while a tool runs. */
+const PROMPT = `${toss('❯')} `;
+const ASSISTANT_MARK = toss('⏺');
+const TOOL_MARK = pc.dim('⎿');
+const SPIN_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/** Short label shown next to a running tool. */
 function toolStatus(name: string, args: any): string {
-  const sym = args?.symbol ? ` (${args.symbol})` : '';
+  const sym = args?.symbol ? ` ${pc.dim(args.symbol)}` : '';
   switch (name) {
     case 'get_stock_price':
+      return `시세 조회${sym}`;
     case 'get_orderbook':
+      return `호가 조회${sym}`;
     case 'get_recent_trades':
+      return `체결 조회${sym}`;
     case 'get_candles':
+      return `캔들 조회${sym}`;
     case 'get_price_limits':
+      return `상·하한가 조회${sym}`;
     case 'get_stock_info':
-      return `토스에서 시세 조회 중…${sym}`;
+      return `종목정보 조회${sym}`;
     case 'get_holdings':
-      return '보유 종목 조회 중…';
+      return '보유 종목 조회';
     case 'get_buying_power':
+      return '매수 가능 금액 조회';
     case 'get_trade_info':
-      return '거래 정보 조회 중…';
+      return `거래 정보 조회${sym}`;
     case 'get_exchange_rate':
-      return '환율 조회 중…';
+      return '환율 조회';
     case 'get_market_hours':
-      return '장 운영시간 조회 중…';
+      return '장 운영시간 조회';
     case 'get_orders':
     case 'get_order_detail':
-      return '주문 내역 조회 중…';
+      return '주문 내역 조회';
     case 'place_order':
+      return '주문 처리';
     case 'modify_order':
+      return '주문 정정';
     case 'cancel_order':
-      return '주문 처리 중…';
+      return '주문 취소';
     default:
-      return '조회 중…';
+      return name;
   }
+}
+
+/** Minimal inline spinner that owns a single terminal line. */
+function makeSpinner(): { start: (label: string) => void; setLabel: (l: string) => void; stop: () => void } {
+  let i = 0;
+  let label = '';
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const render = (): void => {
+    process.stdout.write(`\r\x1b[K  ${toss(SPIN_FRAMES[(i = (i + 1) % SPIN_FRAMES.length)])} ${pc.dim(label)}`);
+  };
+  return {
+    start(l) {
+      label = l;
+      if (timer) return;
+      timer = setInterval(render, 80);
+      render();
+    },
+    setLabel(l) {
+      label = l;
+    },
+    stop() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      process.stdout.write('\r\x1b[K'); // clear the spinner line
+    },
+  };
 }
 
 function requireTTY(): boolean {
@@ -50,18 +91,18 @@ function requireTTY(): boolean {
   return false;
 }
 
-/** One-line preview of a restored message, for the resume note. */
+/** One-line preview of a restored message. */
 function preview(m: ChatMessage): string {
-  const who = m.role === 'user' ? pc.cyan('나') : toss('Biero');
-  const body = (m.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
-  return `${who}  ${pc.dim(body || '…')}`;
+  const mark = m.role === 'user' ? toss('❯') : ASSISTANT_MARK;
+  const body = (m.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 64);
+  return `  ${mark} ${pc.dim(body || '…')}`;
 }
 
 export async function runChat({
   fromSetup = false,
   continueSession = false,
 }: { fromSetup?: boolean; continueSession?: boolean } = {}): Promise<void> {
-  if (!fromSetup) process.stdout.write(banner());
+  void fromSetup;
 
   if (!configExists()) {
     process.stdout.write(`  설정이 먼저 필요해요. ${pc.bold('biero setup')} 으로 LLM·토스 키를 연결하세요.\n\n`);
@@ -82,77 +123,88 @@ export async function runChat({
     return;
   }
 
-  intro(`${pc.inverse(toss(' Biero '))}  ${pc.dim('주식 AI 비서와 대화하기')}`);
-
   const messages: ChatMessage[] = continueSession ? loadHistory() : [];
-  const noteLines = [
-    kv('공급자', label ?? '-'),
-    kv('모델', model),
-    '',
-    pc.dim('시세도 물어보세요.  예: "삼성전자 얼마야?"'),
-    pc.dim('새 대화: /reset · 종료: /exit 또는 Ctrl+C'),
-  ];
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  const out = process.stdout;
+  out.write(`\n  ${wordmark('biero')}  ${pc.dim('주식 AI 비서')}\n`);
+  out.write(`  ${pc.dim(`${label ?? '-'} · ${model}`)}\n`);
   if (continueSession && messages.length) {
-    const last = messages.slice(-2).map(preview);
-    noteLines.push('', pc.dim(`이전 대화 ${messages.length}개 메시지를 이어갑니다.`), ...last);
-  } else if (continueSession) {
-    noteLines.push('', pc.dim('이어갈 이전 대화가 없어요. 새로 시작합니다.'));
+    out.write(`  ${pc.dim(`이전 대화 ${messages.length}개 이어가기`)}\n`);
+    for (const m of messages.slice(-2)) out.write(`${preview(m)}\n`);
   }
-  note(noteLines.join('\n'), '대화 시작');
+  out.write(`  ${pc.dim('/reset 새 대화   /exit 종료')}\n\n`);
+
+  // ── REPL ──────────────────────────────────────────────────────────────────
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  let closed = false;
+  rl.on('close', () => {
+    closed = true;
+  });
+  rl.on('SIGINT', () => rl.close());
+
+  const ask = (): Promise<string | null> =>
+    new Promise((resolve) => {
+      if (closed) return resolve(null);
+      const onClose = (): void => resolve(null);
+      rl.once('close', onClose);
+      rl.question(PROMPT, (answer) => {
+        rl.removeListener('close', onClose);
+        resolve(answer);
+      });
+    });
+
+  const spinner = makeSpinner();
 
   for (;;) {
-    const input = await text({ message: pc.cyan('나') });
-    if (isCancel(input)) {
-      outro(tossSoft('대화를 종료할게요.'));
-      return;
-    }
-    const msg = (input ?? '').trim();
+    const input = await ask();
+    if (input === null) break; // Ctrl+C / Ctrl+D / EOF
+    const msg = input.trim();
     if (!msg) continue;
-    if (EXIT_WORDS.has(msg.toLowerCase())) {
-      outro(tossSoft('대화를 종료할게요.'));
-      return;
-    }
+    if (EXIT_WORDS.has(msg.toLowerCase())) break;
     if (RESET_WORDS.has(msg.toLowerCase())) {
       messages.length = 0;
       clearHistory();
-      note(tossSoft('새 대화를 시작했어요. 이전 맥락을 지웠습니다.'), '초기화');
+      out.write(`  ${pc.dim('새 대화를 시작했어요.')}\n\n`);
       continue;
     }
 
     messages.push({ role: 'user', content: msg });
+    out.write('\n');
+    spinner.start('생각 중…');
 
-    const s = spinner();
-    s.start('생각하는 중…');
-    let streaming = false;
-    const startStream = (): void => {
-      if (streaming) return;
-      s.stop(toss(pc.bold('Biero')));
-      streaming = true;
-      process.stdout.write('  ');
-    };
-
+    let started = false;
     try {
       const reply = await runAgent(cfg, messages, {
         onTool: (name, args) => {
-          if (!streaming) s.message(toolStatus(name, args));
+          spinner.stop();
+          out.write(`  ${TOOL_MARK} ${pc.dim(toolStatus(name, args))}\n`);
+          spinner.start('생각 중…');
         },
         onToken: (delta) => {
-          startStream();
-          process.stdout.write(delta);
+          if (!started) {
+            spinner.stop();
+            out.write(`  ${ASSISTANT_MARK} `);
+            started = true;
+          }
+          out.write(delta.replace(/\n/g, '\n    '));
         },
       });
-      if (streaming) {
-        process.stdout.write('\n\n');
+      if (started) {
+        out.write('\n\n');
       } else {
-        s.stop(toss(pc.bold('Biero')));
-        note((reply || '(빈 응답)').trim(), '');
+        spinner.stop();
+        out.write(`  ${ASSISTANT_MARK} ${(reply || '(빈 응답)').trim()}\n\n`);
       }
       saveHistory(messages);
     } catch (e: any) {
-      if (streaming) process.stdout.write('\n');
-      s.stop(danger('응답 실패'));
-      note(String(e?.message || e), '오류');
+      spinner.stop();
+      if (started) out.write('\n');
+      out.write(`  ${danger('✖')} ${danger(String(e?.message || e))}\n\n`);
       messages.pop();
     }
   }
+
+  rl.close();
+  out.write(`\n  ${tossSoft('안녕히 가세요.')}\n\n`);
 }
