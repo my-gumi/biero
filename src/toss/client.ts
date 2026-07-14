@@ -263,12 +263,17 @@ function retryDelayMs(rateLimit: RateLimit, attempt: number): number {
   return Math.min(baseSeconds * 1000, 10_000) + jitter;
 }
 
-async function tossGetJson(url: string, headers: Record<string, string>): Promise<TossHttp> {
+/**
+ * Core Toss request with transparent 429 retry (Retry-After / backoff+jitter).
+ * Method-agnostic: GET helpers pass headers only; write helpers pass method +
+ * JSON body. Returns the RAW parsed response.
+ */
+async function tossRequest(url: string, init: RequestInit): Promise<TossHttp> {
   let lastError: string | undefined;
   for (let attempt = 0; attempt <= RATE_LIMIT_MAX_RETRIES; attempt++) {
     const t = abortable(10_000);
     try {
-      const res = await fetch(url, { headers, signal: t.signal });
+      const res = await fetch(url, { ...init, signal: t.signal });
       const rateLimit = parseRateLimit(res.headers);
       if (res.status === 429 && attempt < RATE_LIMIT_MAX_RETRIES) {
         await sleep(retryDelayMs(rateLimit, attempt));
@@ -284,6 +289,10 @@ async function tossGetJson(url: string, headers: Record<string, string>): Promis
     }
   }
   return { ok: false, status: 429, error: lastError ?? '레이트리밋 초과 (429)' };
+}
+
+function tossGetJson(url: string, headers: Record<string, string>): Promise<TossHttp> {
+  return tossRequest(url, { headers });
 }
 
 /**
@@ -305,6 +314,26 @@ async function authedGet(
   }
   const base = baseURL.replace(/\/+$/, '');
   return tossGetJson(`${base}${path}`, buildTossHeaders(token, { accountSeq: opts.accountSeq }));
+}
+
+/** Authenticated POST (JSON body) against the Toss Open API. */
+async function authedSend(
+  { clientId, clientSecret, baseURL = TOSS_BASE_URL }: TossCreds,
+  path: string,
+  opts: { accountSeq?: string; body?: unknown } = {},
+): Promise<TossHttp> {
+  let token: string;
+  try {
+    token = await getAccessToken({ clientId, clientSecret, baseURL });
+  } catch (e: any) {
+    return { ok: false, error: e?.message };
+  }
+  const base = baseURL.replace(/\/+$/, '');
+  return tossRequest(`${base}${path}`, {
+    method: 'POST',
+    headers: { ...buildTossHeaders(token, { accountSeq: opts.accountSeq }), 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts.body ?? {}),
+  });
 }
 
 export async function getAccounts({
@@ -501,4 +530,82 @@ export async function getStockInfo(creds: TossCreds & { symbol: string }): Promi
     authedGet(creds, `/api/v1/stocks/${sym}/warnings`),
   ]);
   return { ok: stock.ok || warnings.ok, symbol: creds.symbol, stock, warnings };
+}
+
+// ── Orders (#8, #9) — require account context ───────────────────────────────
+
+export type OrderSide = 'BUY' | 'SELL';
+export type OrderType = 'LIMIT' | 'MARKET';
+export type TimeInForce = 'DAY' | 'CLS';
+
+/** Order-create request body. Quantity-based (KR·US) or amount-based (US MARKET). */
+export interface OrderCreateBody {
+  symbol: string;
+  side: OrderSide;
+  orderType: OrderType;
+  quantity?: string;
+  price?: string;
+  orderAmount?: string;
+  timeInForce?: TimeInForce;
+  confirmHighValueOrder?: boolean;
+  clientOrderId?: string;
+}
+
+export interface OrderModifyBody {
+  orderType: OrderType;
+  quantity?: string;
+  price?: string;
+  confirmHighValueOrder?: boolean;
+}
+
+/** List orders. `status` is 'OPEN' (대기) or 'CLOSED' (종료). */
+export function getOrders(
+  creds: TossCreds & {
+    accountSeq: string;
+    status?: 'OPEN' | 'CLOSED';
+    symbol?: string;
+    limit?: number;
+    cursor?: string;
+    from?: string;
+    to?: string;
+  },
+): Promise<TossHttp> {
+  const status = creds.status ?? 'OPEN';
+  const path = `/api/v1/orders${qs({
+    status,
+    symbol: creds.symbol,
+    limit: creds.limit,
+    cursor: creds.cursor,
+    from: creds.from,
+    to: creds.to,
+  })}`;
+  return authedGet(creds, path, { accountSeq: creds.accountSeq });
+}
+
+/** Fetch one order's details (incl. execution). */
+export function getOrderDetail(creds: TossCreds & { accountSeq: string; orderId: string }): Promise<TossHttp> {
+  return authedGet(creds, `/api/v1/orders/${encodeURIComponent(creds.orderId)}`, { accountSeq: creds.accountSeq });
+}
+
+/** ⚠️ Place a REAL order. Callers MUST have explicit user confirmation. */
+export function createOrder(creds: TossCreds & { accountSeq: string; order: OrderCreateBody }): Promise<TossHttp> {
+  return authedSend(creds, '/api/v1/orders', { accountSeq: creds.accountSeq, body: creds.order });
+}
+
+/** ⚠️ Modify a REAL pending order. Returns a NEW orderId. */
+export function modifyOrder(
+  creds: TossCreds & { accountSeq: string; orderId: string; body: OrderModifyBody },
+): Promise<TossHttp> {
+  return authedSend(creds, `/api/v1/orders/${encodeURIComponent(creds.orderId)}/modify`, {
+    accountSeq: creds.accountSeq,
+    body: creds.body,
+  });
+}
+
+/** ⚠️ Cancel a REAL pending order. */
+export function cancelOrder(creds: TossCreds & { accountSeq: string; orderId: string }): Promise<TossHttp> {
+  return authedSend(creds, `/api/v1/orders/${encodeURIComponent(creds.orderId)}/cancel`, {
+    accountSeq: creds.accountSeq,
+    body: {},
+  });
 }

@@ -5,7 +5,10 @@ import {
   getBuyingPower,
   getExchangeRate,
   getStockInfo,
+  getOrders,
+  createOrder,
 } from '../dist/src/toss/client.js';
+import { runTool } from '../dist/src/tools/registry.js';
 
 // Build a fetch mock whose responses expose a case-insensitive `headers.get`,
 // matching the subset of the Headers API our client relies on.
@@ -96,4 +99,82 @@ test('getStockInfo issues the access token only once for its two parallel calls 
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test('getOrders builds status/limit query and sends account header', async () => {
+  const original = globalThis.fetch;
+  const base = 'https://mock-orders.example';
+  const { fn, calls } = makeFetch((url) => {
+    if (url.endsWith('/oauth2/token')) return { status: 200, body: { access_token: 'tok', expires_in: 3600 } };
+    return { status: 200, body: { result: { orders: [], nextCursor: null, hasNext: false } } };
+  });
+  globalThis.fetch = fn;
+  try {
+    const res = await getOrders({ ...CREDS(base), accountSeq: '3', status: 'CLOSED', limit: 5 });
+    assert.equal(res.ok, true);
+    const c = calls.find((x) => x.url.includes('/api/v1/orders'));
+    assert.match(c.url, /status=CLOSED/);
+    assert.match(c.url, /limit=5/);
+    assert.equal(c.init.headers['X-Tossinvest-Account'], '3');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('createOrder POSTs JSON body with method and content-type', async () => {
+  const original = globalThis.fetch;
+  const base = 'https://mock-create.example';
+  const { fn, calls } = makeFetch((url) => {
+    if (url.endsWith('/oauth2/token')) return { status: 200, body: { access_token: 'tok', expires_in: 3600 } };
+    return { status: 200, body: { result: { orderId: 'ord-1', clientOrderId: null } } };
+  });
+  globalThis.fetch = fn;
+  try {
+    const res = await createOrder({
+      ...CREDS(base),
+      accountSeq: '3',
+      order: { symbol: '005930', side: 'BUY', orderType: 'LIMIT', price: '50000', quantity: '1', confirmHighValueOrder: true },
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.body.result.orderId, 'ord-1');
+    const c = calls.find((x) => x.url.endsWith('/api/v1/orders'));
+    assert.equal(c.init.method, 'POST');
+    assert.equal(c.init.headers['Content-Type'], 'application/json');
+    const sent = JSON.parse(c.init.body);
+    assert.equal(sent.symbol, '005930');
+    assert.equal(sent.confirmHighValueOrder, true);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('place_order tool returns a preview and does NOT hit the API without confirmed=true', async () => {
+  const original = globalThis.fetch;
+  let called = 0;
+  globalThis.fetch = async (url) => {
+    called += 1;
+    if (String(url).endsWith('/oauth2/token')) {
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ access_token: 't', expires_in: 3600 }) };
+    }
+    throw new Error('order endpoint must not be called during preview');
+  };
+  const cfg = {
+    toss: { clientId: 'x', clientSecret: 'y', baseURL: 'https://mock-preview.example', accountSeq: '1' },
+  };
+  try {
+    const out = JSON.parse(await runTool('place_order', { symbol: '005930', side: 'BUY', orderType: 'LIMIT', price: '200000', quantity: '600' }, cfg));
+    assert.equal(out.needsConfirmation, true);
+    assert.equal(out.preview.highValue, true, '1.2억 order should be flagged high-value');
+    assert.equal(out.preview.estimatedAmountKRW, 120000000);
+    assert.equal(called, 0, 'no network call (not even token) during a preview');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('place_order tool requires a selected account', async () => {
+  const out = JSON.parse(
+    await runTool('place_order', { symbol: '005930', side: 'BUY', orderType: 'MARKET', quantity: '1', confirmed: true }, { toss: { clientId: 'x', clientSecret: 'y' } }),
+  );
+  assert.match(out.error, /계좌/);
 });
