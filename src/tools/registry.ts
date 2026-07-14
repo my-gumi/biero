@@ -11,8 +11,17 @@ import {
   getCandles,
   getPriceLimits,
   getStockInfo,
+  getOrders,
+  getOrderDetail,
+  createOrder,
+  modifyOrder,
+  cancelOrder,
+  type OrderCreateBody,
 } from '../toss/client.js';
 import type { Config } from '../shared/types.js';
+
+/** Orders whose estimated KRW notional reaches this need explicit confirmation. */
+const HIGH_VALUE_KRW = 100_000_000;
 
 export interface ToolDef {
   type: 'function';
@@ -222,6 +231,112 @@ export const TOOLS: ToolDef[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'get_orders',
+      description:
+        '선택된 계좌의 주문 내역을 조회한다. status=OPEN(대기·미체결), status=CLOSED(종료·체결/취소). ' +
+        'symbol로 특정 종목만 필터링 가능. "내 주문 상태", "미체결 주문"에 사용한다.',
+      parameters: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['OPEN', 'CLOSED'], description: '주문 상태. 기본값 OPEN.' },
+          symbol: { type: 'string', description: '선택 사항. 종목 심볼 필터.' },
+          limit: { type: 'integer', description: '가져올 개수 (1~100, 기본 20).' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_order_detail',
+      description: '주문 ID로 개별 주문의 상세(체결 내역 포함)를 조회한다.',
+      parameters: {
+        type: 'object',
+        properties: {
+          orderId: { type: 'string', description: '주문 ID' },
+        },
+        required: ['orderId'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'place_order',
+      description:
+        '⚠️ 실제 주식 주문을 넣는다(실거래·실제 돈). 반드시 2단계로 사용하라: ' +
+        '(1) confirmed 없이(또는 false) 호출하면 API를 호출하지 않고 주문 미리보기만 반환한다. ' +
+        '그 내용을 사용자에게 그대로 보여주고 "정말 주문할까요?"로 명시적 동의를 받아라. ' +
+        '(2) 사용자가 이번 턴에서 분명히 동의한 경우에만 confirmed=true로 다시 호출해 실제 체결한다. ' +
+        '사용자의 명시적 동의 없이 confirmed=true를 절대 넣지 마라. ' +
+        'orderType=LIMIT이면 price 필수, MARKET이면 price 무시. ' +
+        'quantity(주 수) 또는 orderAmount(달러, 미국 시장가 매수 전용) 중 하나로 수량을 지정한다.',
+      parameters: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: '종목 심볼. ' + SYMBOL_HINT },
+          side: { type: 'string', enum: ['BUY', 'SELL'], description: '매수(BUY)/매도(SELL)' },
+          orderType: { type: 'string', enum: ['LIMIT', 'MARKET'], description: '지정가(LIMIT)/시장가(MARKET)' },
+          quantity: { type: 'string', description: '주문 수량(주). orderAmount 대신 사용.' },
+          price: { type: 'string', description: 'LIMIT 주문 가격. MARKET이면 생략.' },
+          orderAmount: { type: 'string', description: '주문 금액(달러). 미국 MARKET 매수 전용.' },
+          timeInForce: { type: 'string', enum: ['DAY', 'CLS'], description: '유효조건. 기본 DAY.' },
+          confirmed: {
+            type: 'boolean',
+            description: '사용자의 명시적 동의를 받은 뒤에만 true. 없으면 미리보기만 반환.',
+          },
+        },
+        required: ['symbol', 'side', 'orderType'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'modify_order',
+      description:
+        '⚠️ 대기 중인 실제 주문을 정정한다(실거래). place_order와 동일하게 2단계로 사용하라: ' +
+        'confirmed 없이 호출하면 미리보기만 반환하고, 사용자 동의 후에만 confirmed=true로 실제 정정한다. ' +
+        '정정 시 새 주문 ID가 발급된다.',
+      parameters: {
+        type: 'object',
+        properties: {
+          orderId: { type: 'string', description: '정정할 원주문 ID' },
+          orderType: { type: 'string', enum: ['LIMIT', 'MARKET'], description: '변경할 호가 유형' },
+          quantity: { type: 'string', description: '변경할 수량(선택)' },
+          price: { type: 'string', description: '변경할 가격(LIMIT일 때)' },
+          confirmed: { type: 'boolean', description: '사용자 동의 후에만 true.' },
+        },
+        required: ['orderId', 'orderType'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'cancel_order',
+      description:
+        '⚠️ 대기 중인 실제 주문을 취소한다(실거래). confirmed 없이 호출하면 취소 대상만 미리보기로 반환하고, ' +
+        '사용자가 취소에 동의한 경우에만 confirmed=true로 실제 취소한다.',
+      parameters: {
+        type: 'object',
+        properties: {
+          orderId: { type: 'string', description: '취소할 주문 ID' },
+          confirmed: { type: 'boolean', description: '사용자 동의 후에만 true.' },
+        },
+        required: ['orderId'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -369,6 +484,136 @@ export async function runTool(name: string, args: any, cfg: Config): Promise<str
     if (!symbol) return JSON.stringify({ error: 'symbol이 필요합니다.' });
     const result = await getPriceLimits({ ...cfg.toss, symbol });
     return clip({ ok: result.ok, symbol, priceLimits: unwrap(result) });
+  }
+
+  // ── Orders (#8, #9) — require a selected account ──────────────────────────
+  if (name === 'get_orders') {
+    if (!cfg?.toss?.accountSeq) return ERR_NO_ACCOUNT;
+    const status = args?.status === 'CLOSED' ? 'CLOSED' : 'OPEN';
+    const limit = Number.isFinite(args?.limit) ? Number(args.limit) : undefined;
+    const result = await getOrders({
+      ...cfg.toss,
+      accountSeq: cfg.toss.accountSeq,
+      status,
+      ...(symbol ? { symbol } : {}),
+      ...(limit ? { limit } : {}),
+    });
+    return clip({ ok: result.ok, status, orders: unwrap(result) });
+  }
+
+  if (name === 'get_order_detail') {
+    if (!cfg?.toss?.accountSeq) return ERR_NO_ACCOUNT;
+    const orderId = String(args?.orderId ?? '').trim();
+    if (!orderId) return JSON.stringify({ error: 'orderId가 필요합니다.' });
+    const result = await getOrderDetail({ ...cfg.toss, accountSeq: cfg.toss.accountSeq, orderId });
+    return clip({ ok: result.ok, orderId, order: unwrap(result) });
+  }
+
+  if (name === 'place_order') {
+    if (!cfg?.toss?.accountSeq) return ERR_NO_ACCOUNT;
+    const side = args?.side === 'SELL' ? 'SELL' : args?.side === 'BUY' ? 'BUY' : null;
+    const orderType = args?.orderType === 'MARKET' ? 'MARKET' : args?.orderType === 'LIMIT' ? 'LIMIT' : null;
+    if (!symbol || !side || !orderType) {
+      return JSON.stringify({ error: 'symbol, side(BUY/SELL), orderType(LIMIT/MARKET)이 필요합니다.' });
+    }
+    const quantity = args?.quantity != null ? String(args.quantity).trim() : '';
+    const price = args?.price != null ? String(args.price).trim() : '';
+    const orderAmount = args?.orderAmount != null ? String(args.orderAmount).trim() : '';
+    if (orderType === 'LIMIT' && !price) return JSON.stringify({ error: 'LIMIT 주문은 price가 필요합니다.' });
+    if (!quantity && !orderAmount) return JSON.stringify({ error: 'quantity 또는 orderAmount가 필요합니다.' });
+
+    const isDomestic = /^\d{6}$/.test(symbol);
+    const estAmountKRW =
+      isDomestic && price && quantity ? Number(price) * Number(quantity) : null;
+    const highValue = estAmountKRW != null && estAmountKRW >= HIGH_VALUE_KRW;
+
+    const preview = {
+      symbol,
+      side,
+      orderType,
+      ...(quantity ? { quantity } : {}),
+      ...(orderType === 'LIMIT' ? { price } : {}),
+      ...(orderAmount ? { orderAmount } : {}),
+      timeInForce: args?.timeInForce === 'CLS' ? 'CLS' : 'DAY',
+      estimatedAmountKRW: estAmountKRW,
+      highValue,
+    };
+
+    if (args?.confirmed !== true) {
+      return clip({
+        needsConfirmation: true,
+        action: 'place_order',
+        preview,
+        message:
+          '실제 주문입니다(실거래). 위 내용을 사용자에게 보여주고 명시적으로 동의를 받은 뒤에만 confirmed=true로 다시 호출하세요.' +
+          (highValue ? ' ⚠️ 1억원 이상 고액 주문입니다. 특히 신중히 확인받으세요.' : ''),
+      });
+    }
+
+    const order: OrderCreateBody = {
+      symbol,
+      side,
+      orderType,
+      ...(quantity ? { quantity } : {}),
+      ...(orderType === 'LIMIT' ? { price } : {}),
+      ...(orderAmount ? { orderAmount } : {}),
+      timeInForce: preview.timeInForce as 'DAY' | 'CLS',
+      confirmHighValueOrder: true, // user already confirmed via the tool gate
+    };
+    const result = await createOrder({ ...cfg.toss, accountSeq: cfg.toss.accountSeq, order });
+    return clip({ ok: result.ok, executed: result.ok, result: unwrap(result) });
+  }
+
+  if (name === 'modify_order') {
+    if (!cfg?.toss?.accountSeq) return ERR_NO_ACCOUNT;
+    const orderId = String(args?.orderId ?? '').trim();
+    const orderType = args?.orderType === 'MARKET' ? 'MARKET' : args?.orderType === 'LIMIT' ? 'LIMIT' : null;
+    if (!orderId || !orderType) return JSON.stringify({ error: 'orderId와 orderType(LIMIT/MARKET)이 필요합니다.' });
+    const quantity = args?.quantity != null ? String(args.quantity).trim() : '';
+    const price = args?.price != null ? String(args.price).trim() : '';
+
+    const preview = {
+      orderId,
+      orderType,
+      ...(quantity ? { quantity } : {}),
+      ...(orderType === 'LIMIT' && price ? { price } : {}),
+    };
+    if (args?.confirmed !== true) {
+      return clip({
+        needsConfirmation: true,
+        action: 'modify_order',
+        preview,
+        message: '실제 주문 정정입니다. 사용자 동의를 받은 뒤에만 confirmed=true로 다시 호출하세요.',
+      });
+    }
+    const result = await modifyOrder({
+      ...cfg.toss,
+      accountSeq: cfg.toss.accountSeq,
+      orderId,
+      body: {
+        orderType,
+        ...(quantity ? { quantity } : {}),
+        ...(orderType === 'LIMIT' && price ? { price } : {}),
+        confirmHighValueOrder: true,
+      },
+    });
+    return clip({ ok: result.ok, executed: result.ok, result: unwrap(result) });
+  }
+
+  if (name === 'cancel_order') {
+    if (!cfg?.toss?.accountSeq) return ERR_NO_ACCOUNT;
+    const orderId = String(args?.orderId ?? '').trim();
+    if (!orderId) return JSON.stringify({ error: 'orderId가 필요합니다.' });
+    if (args?.confirmed !== true) {
+      return clip({
+        needsConfirmation: true,
+        action: 'cancel_order',
+        preview: { orderId },
+        message: '실제 주문 취소입니다. 사용자 동의를 받은 뒤에만 confirmed=true로 다시 호출하세요.',
+      });
+    }
+    const result = await cancelOrder({ ...cfg.toss, accountSeq: cfg.toss.accountSeq, orderId });
+    return clip({ ok: result.ok, executed: result.ok, result: unwrap(result) });
   }
 
   return JSON.stringify({ error: `알 수 없는 도구: ${name}` });
