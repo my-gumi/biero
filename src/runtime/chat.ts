@@ -101,7 +101,7 @@ export async function runChat({
   note(noteLines.join('\n'), '대화 시작');
 
   for (;;) {
-    const input = await text({ message: pc.cyan('나'), placeholder: '삼성전자 얼마야?' });
+    const input = await text({ message: pc.cyan('나') });
     if (isCancel(input)) {
       outro(tossSoft('대화를 종료할게요.'));
       return;

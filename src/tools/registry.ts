@@ -403,6 +403,7 @@ export async function runTool(name: string, args: any, cfg: Config): Promise<str
       ok: result.ok,
       symbol,
       summary,
+      error: result.error ?? result?.price?.error ?? result?.price?.body?.error?.message ?? null,
       price: result?.price?.body ?? result?.price,
       stock: stockRow
         ? { name: stockRow.name, market: stockRow.market, currency: stockRow.currency, status: stockRow.status }

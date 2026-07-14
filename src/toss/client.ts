@@ -180,8 +180,9 @@ export async function validateTossCredentials({
     let message: string | undefined;
     try {
       const err: any = await res.json();
-      code = err?.error?.code;
-      message = err?.error?.message;
+      // OAuth errors are flat ({error, error_description}); API errors nest under error.{code,message}.
+      code = err?.error?.code ?? (typeof err?.error === 'string' ? err.error : undefined);
+      message = err?.error?.message ?? err?.error_description ?? err?.message;
     } catch {
       /* non-JSON error body */
     }
