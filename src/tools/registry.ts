@@ -23,6 +23,22 @@ import type { Config } from '../shared/types.js';
 /** Orders whose estimated KRW notional reaches this need explicit confirmation. */
 const HIGH_VALUE_KRW = 100_000_000;
 
+/** Anthropic tool schema (name/description/input_schema) derived from {@link TOOLS}. */
+export interface AnthropicToolDef {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+/** Convert the OpenAI-style tool defs to Anthropic's `tools` format. */
+export function anthropicTools(): AnthropicToolDef[] {
+  return TOOLS.map((t) => ({
+    name: t.function.name,
+    description: t.function.description,
+    input_schema: t.function.parameters,
+  }));
+}
+
 export interface ToolDef {
   type: 'function';
   function: {

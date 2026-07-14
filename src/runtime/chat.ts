@@ -3,10 +3,44 @@ import pc from 'picocolors';
 
 import { loadConfig, configExists } from '../shared/config.js';
 import { runAgent } from './agent.js';
+import { loadHistory, saveHistory, clearHistory } from './history.js';
 import { banner, toss, tossSoft, danger, kv } from '../shared/theme.js';
 import type { ChatMessage } from '../shared/types.js';
 
 const EXIT_WORDS = new Set(['/exit', '/quit', '/q', 'exit', 'quit', ':q']);
+const RESET_WORDS = new Set(['/reset', '/new', '/clear']);
+
+/** Friendly status shown while a tool runs. */
+function toolStatus(name: string, args: any): string {
+  const sym = args?.symbol ? ` (${args.symbol})` : '';
+  switch (name) {
+    case 'get_stock_price':
+    case 'get_orderbook':
+    case 'get_recent_trades':
+    case 'get_candles':
+    case 'get_price_limits':
+    case 'get_stock_info':
+      return `토스에서 시세 조회 중…${sym}`;
+    case 'get_holdings':
+      return '보유 종목 조회 중…';
+    case 'get_buying_power':
+    case 'get_trade_info':
+      return '거래 정보 조회 중…';
+    case 'get_exchange_rate':
+      return '환율 조회 중…';
+    case 'get_market_hours':
+      return '장 운영시간 조회 중…';
+    case 'get_orders':
+    case 'get_order_detail':
+      return '주문 내역 조회 중…';
+    case 'place_order':
+    case 'modify_order':
+    case 'cancel_order':
+      return '주문 처리 중…';
+    default:
+      return '조회 중…';
+  }
+}
 
 function requireTTY(): boolean {
   if (process.stdin.isTTY && process.stdout.isTTY) return true;
@@ -16,7 +50,17 @@ function requireTTY(): boolean {
   return false;
 }
 
-export async function runChat({ fromSetup = false }: { fromSetup?: boolean } = {}): Promise<void> {
+/** One-line preview of a restored message, for the resume note. */
+function preview(m: ChatMessage): string {
+  const who = m.role === 'user' ? pc.cyan('나') : toss('Biero');
+  const body = (m.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  return `${who}  ${pc.dim(body || '…')}`;
+}
+
+export async function runChat({
+  fromSetup = false,
+  continueSession = false,
+}: { fromSetup?: boolean; continueSession?: boolean } = {}): Promise<void> {
   if (!fromSetup) process.stdout.write(banner());
 
   if (!configExists()) {
@@ -39,18 +83,22 @@ export async function runChat({ fromSetup = false }: { fromSetup?: boolean } = {
   }
 
   intro(`${pc.inverse(toss(' Biero '))}  ${pc.dim('주식 AI 비서와 대화하기')}`);
-  note(
-    [
-      kv('공급자', label ?? '-'),
-      kv('모델', model),
-      '',
-      pc.dim('시세도 물어보세요.  예: "삼성전자 얼마야?"'),
-      pc.dim('종료: /exit 또는 Ctrl+C'),
-    ].join('\n'),
-    '대화 시작',
-  );
 
-  const messages: ChatMessage[] = [];
+  const messages: ChatMessage[] = continueSession ? loadHistory() : [];
+  const noteLines = [
+    kv('공급자', label ?? '-'),
+    kv('모델', model),
+    '',
+    pc.dim('시세도 물어보세요.  예: "삼성전자 얼마야?"'),
+    pc.dim('새 대화: /reset · 종료: /exit 또는 Ctrl+C'),
+  ];
+  if (continueSession && messages.length) {
+    const last = messages.slice(-2).map(preview);
+    noteLines.push('', pc.dim(`이전 대화 ${messages.length}개 메시지를 이어갑니다.`), ...last);
+  } else if (continueSession) {
+    noteLines.push('', pc.dim('이어갈 이전 대화가 없어요. 새로 시작합니다.'));
+  }
+  note(noteLines.join('\n'), '대화 시작');
 
   for (;;) {
     const input = await text({ message: pc.cyan('나'), placeholder: '삼성전자 얼마야?' });
@@ -64,22 +112,44 @@ export async function runChat({ fromSetup = false }: { fromSetup?: boolean } = {
       outro(tossSoft('대화를 종료할게요.'));
       return;
     }
+    if (RESET_WORDS.has(msg.toLowerCase())) {
+      messages.length = 0;
+      clearHistory();
+      note(tossSoft('새 대화를 시작했어요. 이전 맥락을 지웠습니다.'), '초기화');
+      continue;
+    }
 
     messages.push({ role: 'user', content: msg });
 
     const s = spinner();
     s.start('생각하는 중…');
+    let streaming = false;
+    const startStream = (): void => {
+      if (streaming) return;
+      s.stop(toss(pc.bold('Biero')));
+      streaming = true;
+      process.stdout.write('  ');
+    };
+
     try {
       const reply = await runAgent(cfg, messages, {
         onTool: (name, args) => {
-          if (name === 'get_stock_price') {
-            s.message(`토스에서 시세 조회 중…${args?.symbol ? ` (${args.symbol})` : ''}`);
-          }
+          if (!streaming) s.message(toolStatus(name, args));
+        },
+        onToken: (delta) => {
+          startStream();
+          process.stdout.write(delta);
         },
       });
-      s.stop(toss(pc.bold('Biero')));
-      note((reply || '(빈 응답)').trim(), '');
+      if (streaming) {
+        process.stdout.write('\n\n');
+      } else {
+        s.stop(toss(pc.bold('Biero')));
+        note((reply || '(빈 응답)').trim(), '');
+      }
+      saveHistory(messages);
     } catch (e: any) {
+      if (streaming) process.stdout.write('\n');
       s.stop(danger('응답 실패'));
       note(String(e?.message || e), '오류');
       messages.pop();

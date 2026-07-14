@@ -10,6 +10,7 @@ import { runChat } from '../src/runtime/chat.js';
 import { runGatewaySetup } from '../src/gateway/setup.js';
 import { runGateway, showGatewayStatus } from '../src/gateway/run.js';
 import { configExists, clearConfig, CONFIG_PATH } from '../src/shared/config.js';
+import { clearHistory } from '../src/runtime/history.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Compiled layout is dist/bin/biero.js → package.json is two levels up.
@@ -32,7 +33,7 @@ ${pc.dim('사용법')}
   biero [command]
 
 ${pc.dim('명령')}
-  chat             AI 비서와 대화 (LLM에 바로 요청·응답)
+  chat             AI 비서와 대화 (LLM에 바로 요청·응답) ${pc.dim('(--continue: 지난 대화 이어가기)')}
   setup            LLM 공급자 · 토스증권 API 키를 설정 (대화형)
   gateway          메신저(텔레그램·디스코드) 원격 비서 — setup · start · status
   config, status   현재 설정 보기
@@ -60,6 +61,7 @@ async function reset(): Promise<void> {
     return;
   }
   clearConfig();
+  clearHistory();
   process.stdout.write(`\n  ${pc.bold('삭제 완료.')} 다시 설정하려면 biero setup 을 실행하세요.\n\n`);
 }
 
@@ -103,8 +105,11 @@ async function main(): Promise<void> {
   switch (cmd) {
     case 'setup':
       return runSetup();
-    case 'chat':
-      return runChat();
+    case 'chat': {
+      const flags = process.argv.slice(3);
+      const continueSession = flags.includes('--continue') || flags.includes('-c');
+      return runChat({ continueSession });
+    }
     case 'gateway':
       return runGatewayCommand();
     case 'config':
