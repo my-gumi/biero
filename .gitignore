@@ -4,9 +4,6 @@ node_modules
 # build output
 dist
 
-# OMC state
-.omc
-
 # logs / env
 *.log
 .env
